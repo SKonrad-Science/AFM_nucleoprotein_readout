@@ -7,17 +7,13 @@ import numpy as np
 import scipy
 import scipy.interpolate as interp
 from scipy.optimize import curve_fit
+from skimage import morphology
+from scipy.ndimage import rotate
 import math
 
-import matplotlib.pyplot as plt
-from matplotlib import cm
-from mpl_toolkits.mplot3d import Axes3D
-
-import plot_functions as plot
-
 neighbour_matrix = np.array([[1., 1., 1.],
-                            [1., 0., 1.],
-                            [1., 1., 1.]])
+                             [1., 0., 1.],
+                             [1., 1., 1.]])
 
 
 def gauss_function(x, a, x0, sigma):
@@ -37,13 +33,13 @@ def skel_pars(mol_skeleton):
 
     Output:
         eps_pixels - array
-            x any y coordinated of the pixels of the endpoints
+            x any y coordinates of the pixels of the endpoints
         eps_number - int
             Amount of endpoints of the skeleton
         bps_pixels - array
             x any y coordinated of the pixels of the branchpoints
         bps_number - int
-            Amount of branchpoints of the skeleton
+            Amount of branchpoints of the skeleton (connected areas where one or more skeleton pixels have > 2 nb)
         pixels_number - int
             Amount of all pixels in the skeleton. Can be used to estimate the length of the structure and thus
             helps to classify whether a structure is too small or too large to be a proper molecule
@@ -56,14 +52,25 @@ def skel_pars(mol_skeleton):
     for r, c in zip(*np.where(mol_skel == 1)):
         mol_neighbours[r, c] = np.sum(np.multiply(mol_skel[r - 1:r + 2, c - 1:c + 2], neighbour_matrix))
 
-    # Calculate the different numbers
+    # Calculate the number of endpoints
     eps_pixels = np.array(np.where(mol_neighbours == 1)).T
     eps_number = np.shape(np.array(np.where(mol_neighbours == 1)))[1]
-    bps_pixels = np.array(np.where(mol_neighbours >= 3)).T
-    bps_number = np.shape(np.array(np.where(mol_neighbours >= 3)))[1]
     pixels_number = len(mol_skel[mol_skel != 0])
 
-    return eps_pixels, eps_number, bps_pixels, bps_number, pixels_number
+    # Calculate the number of branches
+    bps_pixels = np.array(np.where(mol_neighbours >= 3)).T
+    mol_branches_conn = copy.deepcopy(mol_neighbours)
+    mol_branches_conn[mol_neighbours <= 2] = 0
+    mol_branches_conn[mol_branches_conn != 0] = 1
+    bps_number = np.amax(morphology.label(mol_branches_conn, connectivity=2))
+
+    skel_dict = {'skel_eps_pixels': eps_pixels,
+                 'skel_eps_number': eps_number,
+                 'skel_bps_pixels': bps_pixels,
+                 'skel_bps_number': bps_number,
+                 'skel_pixels_number': pixels_number}
+
+    return skel_dict
 
 
 def sort_skel(mol_pars, start):
@@ -188,7 +195,7 @@ def skeletonize_end(mol_filtered, mol_pars, skel_end_pixels):
     return mol_skel
 
 
-def wiggins(mol_filtered, seg_length, start, end, mol_type, ellipsoid_coeff=None, failed=False):
+def wiggins(mol_filtered, seg_length, start, end, mol_type, ell_data=None, failed=False):
     """ Wiggin's algorithm to trace the DNA length """
 
     seg_length_orig = copy.deepcopy(seg_length)
@@ -202,16 +209,19 @@ def wiggins(mol_filtered, seg_length, start, end, mol_type, ellipsoid_coeff=None
 
     conditions = {
         lambda: mol_type == 'Bare DNA' and np.linalg.norm(end_point - curr_point) > seg_length_orig,
-        # lambda: mol_type == 'Nucleosome' and
-        #         (np.linalg.norm(end_point - curr_point) > 1*seg_length_orig or
-        #          1.5*np.linalg.norm(end_point - curr_point) > np.linalg.norm(end_point - next_point))
         lambda: mol_type == 'Nucleosome' and
-        np.linalg.norm(ellipsoid_coeff[0:2] - curr_point) > np.amax(ellipsoid_coeff[2:4])
+        np.linalg.norm(ell_data['center'] - curr_point) > np.amax(ell_data['abc'] * 1)
     }
     while any(cond() for cond in conditions):
 
-        if np.linalg.norm(end_point - curr_point) <= 0.5*seg_length_orig:
-            seg_length = 1.5
+        if ell_data is None:
+            width = 4
+            if np.linalg.norm(end_point - curr_point) <= 0.5*seg_length_orig:
+                seg_length = 1.5
+        else:
+            width = 3
+            if np.linalg.norm(end_point - curr_point) <= 0.5*seg_length_orig or np.linalg.norm(ell_data['center'] - curr_point) < np.amax(ell_data['abc'] * 1.5):
+                seg_length = 1.5
 
         # Direction and perpendicular direction of the first segment
         direction = (next_point - curr_point)/np.linalg.norm(next_point - curr_point) * seg_length
@@ -234,8 +244,10 @@ def wiggins(mol_filtered, seg_length, start, end, mol_type, ellipsoid_coeff=None
         for _ in range(3):
             # Use interpolation function to calculate a perpend. height profile and find best position along profile
             next_row, next_col = next_point
-            r_linspace = np.linspace(next_row - 4*direction_perp[0], next_row + 4*direction_perp[0], num_interp_values)
-            c_linspace = np.linspace(next_col - 4*direction_perp[1], next_col + 4*direction_perp[1], num_interp_values)
+            r_linspace = np.linspace(next_row - width*direction_perp[0], next_row + width*direction_perp[0],
+                                     num_interp_values)
+            c_linspace = np.linspace(next_col - width*direction_perp[1], next_col + width*direction_perp[1],
+                                     num_interp_values)
             height_profile = interp_function(r_linspace, c_linspace)
             profile_position = np.linspace(1, num_interp_values, num_interp_values)
             best_position = np.mean(height_profile * profile_position) / np.mean(height_profile)
@@ -275,7 +287,7 @@ def wiggins(mol_filtered, seg_length, start, end, mol_type, ellipsoid_coeff=None
     return wiggins_points, failed
 
 
-def radius_of_gyration(mol_filtered):
+def radius_of_gyration(mol_filtered, pixel_size):
     """ Calculate the center of mass and the radius of gyration of the molecule """
     # Improve to handel the case of Integrase where no core molecule is existent to not give 'nan'
     mol_img = copy.deepcopy(mol_filtered)
@@ -287,85 +299,162 @@ def radius_of_gyration(mol_filtered):
     # Radius of gyration formula according to Wikipedia
     radius = np.sqrt((np.sum(pixel_heights*(distances**2) / np.sum(pixel_heights))))
 
-    return radius, center_of_mass
+    rog_dict = {'rog': radius * pixel_size,
+                'com': center_of_mass}
+    return rog_dict
 
 
-def ellipsoid(xy, x0, y0, a, b, c):
-    """ Function for an ellipsoid fit based on the given parameters - 2 variables, 5 parameters """
-    x, y = xy[0, :], xy[1, :]
+def ellipsoid_fct(xy, a, b, c, rot_angle, x0, y0):
+    """
+    Ellipsoid from https://en.wikipedia.org/wiki/Ellipsoid
+    Parametrized x = a*sin(theta)*cos(phi)  (I)
+                 y = b*sin(theta)*sin(phi)  (II)
+                 z = c*cos(theta)
+    Solve (I) and (II) for phi and theta depending on x, y. Then calculate z.
+    Rotation of the ellipsoid and shift along x, y plane is applied by rotating the input coordinates by rot_angle
+    around the z-axis and afterwards moving the coordinates by constant amounts x0 and y0.
+    Args:
+        xy:
+        a:
+        b:
+        c:
+        rot_angle:
+        x0:
+        y0:
+
+    Returns:
+
+    """
+
+    # Rotation matrix and rotation of the offsets
     result = []
-    for x_i, y_i in zip(x, y):
-        if (1 - (x_i-x0)**2/a**2 - (y_i-y0)**2/b**2) <= 0:
-            result.append(0)
+    rot_z = np.array([[np.cos(rot_angle), -np.sin(rot_angle)],
+                      [np.sin(rot_angle), np.cos(rot_angle)]])
+    x0, y0 = rot_z.dot(np.asarray([x0, y0]))
+
+    for x, y in zip(xy[0, :], xy[1, :]):
+        # Rotation of the coordinates
+        x, y = rot_z.dot(np.asarray([x, y])) - np.array([x0, y0])
+
+        # Calculation of the z_value
+        if (b * x) != 0:
+            phi = np.arctan((a * y) / (b * x))
+        elif (b * x) == 0 and y != 0:
+            phi = np.pi / 2
         else:
-            result.append(c*np.sqrt((1 - (x_i-x0)**2/a**2 - (y_i-y0)**2/b**2)))
+            phi = 0
+        if phi != 0 and -1 <= (y / (b * np.sin(phi))) <= 1:
+            theta = np.arccos(y / (b * np.sin(phi)))
+        else:
+            theta = 0
+        if y == 0 and -1 <= (x / a) <= 1:
+            z = c * np.sin(np.arccos(x / a))
+        else:
+            z = c * np.sin(theta)
+        result.append(z)
+
     return np.asarray(result)
 
 
-def ellipsoid_phi(xy, x0, y0, a, b, c, phi):
-    """ Function for an ellipsoid fit based on the given parameters - 2 variables, 5 parameters """
-    # How to calculate the function: Formula for an ellipsoid is on https://de.wikipedia.org/wiki/Ellipsoid
-    # Solve x²/a² + y²/b² + z²/c² = 1 for z. In our case x = x_i - x0 and y = y_1 - y0 since our ellipsoid is not in
-    # the origin of the coordinate system
-    # This way you would already have an ellipsoid but it can not rotate along the z axis
-    # To implement the rotation use the 2D rotation matrix R = (cos(phi) -sin(phi), sin(phi) cos(phi)) and apply it to
-    # the base plane coordinates x and y :
-    # x -> np.cos(phi) * (x_i - x0) - np.sin(phi) * (y_i - y0)
-    # y -> -np.sin(phi) * (x_i - x0) + np.cos(phi) * (y_i - y0)
-    # Now we have a function that can use x_i and y_i as input for the fit (the locations for which I have the height
-    # values measured in my AFM image).
-    # Additionally, there are 6 parameters that are fitted by scipy:
-    # x0, y0: The center of the ellipsoid along the xy plane
-    # a, b, c: The extension parameters of the ellipsoid
-    # phi: the rotation of the ellipsoid around the z-axis
+def ellipsoid_plot(xy, ellipsoid_coeffs):
 
-    x, y = xy[0, :], xy[1, :]
-    result = []
-    for x_i, y_i in zip(x, y):
-        if (1 - ((np.cos(phi) * (x_i - x0) - np.sin(phi) * (y_i - y0))**2/a**2 +
-                 (-np.sin(phi) * (x_i - x0) + np.cos(phi) * (y_i - y0))**2/b**2)) <= 0:
-            result.append(0)
-        else:
-            result.append(c*np.sqrt((1 - ((np.cos(phi) * (x_i - x0) - np.sin(phi) * (y_i - y0))**2/a**2 +
-                                          (-np.sin(phi) * (x_i - x0) + np.cos(phi) * (y_i - y0))**2/b**2))))
+    # Calculate the ellipsoid height values
+    x_arr, y_arr = xy[0, :], xy[1, :]
+    x_mid = (np.amax(x_arr) + np.amin(x_arr))/2
+    y_mid = (np.amax(y_arr) + np.amin(y_arr))/2
+    a, b, c = ellipsoid_coeffs['abc']
+    ell_heights = ellipsoid_fct(xy, a, b, c, rot_angle=0, x0=x_mid, y0=y_mid)
+    x_range = int(np.amax(x_arr) - np.amin(x_arr) + 1)
+    y_range = int(np.amax(y_arr) - np.amin(y_arr) + 1)
+    ell_heights = ell_heights.reshape((x_range, y_range))
 
-    return np.asarray(result)
+    # Rotate - in the fit the coordinates are rotated, here the height array is rotated
+    ell_heights_rot = rotate(ell_heights, angle=-ellipsoid_coeffs['rot_angle'] * 180 / np.pi, reshape=False)
+    ell_heights_rot[ell_heights_rot < 0.03] = 0     # Rotation interpolates and thus causes slight height changes
+    x_center, y_center = ellipsoid_coeffs['center']
+    ell_data = {'ell_heights_rot': ell_heights_rot,
+                'rr_shifted': x_arr.reshape((x_range, y_range)) - (x_mid - x_center),
+                'cc_shifted': y_arr.reshape((x_range, y_range)) - (y_mid - y_center)}
+
+    return ell_data
 
 
-def nuc_core_ellipsoid_fit(mol_filtered, center_of_mass_core, grid_size=10, start=[5., 5., 2.]):
-    """ Fit half an ellipsoid to the nucleosome core particle """
-    # Define parameters
+def ellipsoid_fit(mol_filtered, center_of_mass_core, grid_size=10):
+
+    # Set up fit input
     com_int = np.round(center_of_mass_core).astype(int)
     rr = np.linspace(com_int[0] - grid_size, com_int[0] + grid_size, 2 * grid_size + 1)
     cc = np.linspace(com_int[1] - grid_size, com_int[1] + grid_size, 2 * grid_size + 1)
     cc, rr = np.meshgrid(cc, rr)
     height_grid = copy.deepcopy(mol_filtered[int(np.amin(rr)):int(np.amax(rr)) + 1,
                                 int(np.amin(cc)):int(np.amax(cc)) + 1])
-    # height_grid[height_grid < 1] = 0
     rc_stack = np.vstack((rr.flatten(), cc.flatten()))
 
-    # Try fit
-    coeff_start = [com_int[0], com_int[1], start[0], start[1], start[2], 0.]
-    coeff, var_matrix = curve_fit(ellipsoid_phi, rc_stack, height_grid.flatten(), p0=coeff_start)
+    # Fit rotating half ellipsoid
+    coeff_start = [5, 5, 2, 0, com_int[0], com_int[1]]
+    bounds = ([0, 0, 0, -np.pi / 2, 0, 0], [15, 15, 5, np.pi / 2, np.amax(rr), np.amax(cc)])
+    # weights = copy.deepcopy(height_grid)
+    # weights[height_grid < 1] = 0.5
+    # weights[height_grid > 1] = 1.0
+    try:
+        coeff, var_matrix = curve_fit(ellipsoid_fct, rc_stack, height_grid.flatten(), p0=coeff_start, bounds=bounds)
+    except:
+        return {'failed': True}
 
-    # Cut out the part from the mol_filtered where the z_values of the fitted ellipsoid are > 0
-    # This image is then used to apply the Wiggins algorithm to it
-    z_values = ellipsoid_phi(rc_stack, *coeff)
-    ellipsoid_pixels = np.asarray([rc_stack[:, i] for i in range(0, len(z_values)) if z_values[i] != 0])
-    mol_nuc_ellipsoid_cut = copy.deepcopy(mol_filtered)
-    for r, c in ellipsoid_pixels:
-        mol_nuc_ellipsoid_cut[int(r), int(c)] = np.mean(mol_filtered[mol_filtered != 0])
+    ell_coeffs = {'abc': np.asarray([coeff[1], coeff[0], coeff[2]]),   # Had to change order to fit my ellipse orientat.
+                  'rot_angle': -coeff[3],
+                  'center': coeff[4:6]}
+    ell_data = ellipsoid_plot(rc_stack, ell_coeffs)
+    ell_data.update(ell_coeffs)
 
-    # Plot results
-    # fig = plt.figure()
-    # ax = fig.gca(projection='3d')
-    # surf = ax.plot_surface(rr, cc, height_grid, cmap=cm.coolwarm,
-    #                        linewidth=0, antialiased=False)
-    # surf = ax.plot_surface(rr, cc, z_values.reshape((grid_size*2 + 1, grid_size*2 + 1)), cmap=cm.afmhot,
-    #                        linewidth=0, antialiased=False, shade=True)
-    # plt.show()
+    mol_ellipsoid_cut = copy.deepcopy(mol_filtered)
+    indices = np.where(ell_data['ell_heights_rot'] != 0)
+    rows_1 = np.floor(ell_data['rr_shifted'][indices]).astype(int)
+    cols_1 = np.floor(ell_data['cc_shifted'][indices]).astype(int)
+    rows_2 = np.ceil(ell_data['rr_shifted'][indices]).astype(int)
+    cols_2 = np.ceil(ell_data['cc_shifted'][indices]).astype(int)
+    rows, cols = np.hstack((rows_1, rows_2)), np.hstack((cols_1, cols_2))
+    mol_ellipsoid_cut[rows, cols] = 0
 
-    return coeff, var_matrix, mol_nuc_ellipsoid_cut, ellipsoid_pixels
+    ell_data.update({'mol_ellipsoid_cut': mol_ellipsoid_cut,
+                     'ell_indices': (rows, cols)})
+
+    return ell_data
+
+
+def ellipse_arm_pixel(pixels_arm, ell_data, ell_cutoff=0.6):
+
+    # Define all necessary input parameters
+    a, b, c = ell_data['abc']
+    a = a * (1 - ell_cutoff ** 2)   # ell_cutoff defines the height that should be reached of the ellipsoid before
+    b = b * (1 - ell_cutoff ** 2)   # cutting off the DNA arm
+    phi = -ell_data['rot_angle']
+    center = ell_data['center']
+    last_point = pixels_arm[-1]
+
+    # Parameters of the line that goes through the ellipse
+    m = (center[0] - last_point[0]) / (center[1] - last_point[1])
+    b_line = center[0] - m * center[1]
+    b_line2 = b_line + m * center[1] - center[0]    # Adjust the y-offset to make the ellipse the coordinate center
+
+    # Solve Mitternachtsformula to get the two x values
+    q1 = b ** 2 * (np.cos(phi) ** 2 + 2 * m * np.cos(phi) * np.sin(phi) + m ** 2 * np.sin(phi) ** 2) \
+         + a ** 2 * (m ** 2 * np.cos(phi) ** 2 - 2 * m * np.cos(phi) * np.sin(phi) + np.sin(phi) ** 2)
+    q2 = 2 * b ** 2 * b_line2 * (np.cos(phi) * np.sin(phi) + m * np.sin(phi) ** 2) \
+         + 2 * a ** 2 * b_line2 * (m * np.cos(phi) ** 2 - np.cos(phi) * np.sin(phi))
+    q3 = b_line2 ** 2 * (b ** 2 * np.sin(phi) ** 2 + a ** 2 * np.cos(phi) ** 2) - a ** 2 * b ** 2
+
+    x1 = (-q2 + np.sqrt(q2 ** 2 - 4 * q1 * q3)) / (2 * q1) + center[1]
+    x2 = (-q2 - np.sqrt(q2 ** 2 - 4 * q1 * q3)) / (2 * q1) + center[1]
+    y1 = m * x1 + b_line
+    y2 = m * x2 + b_line
+    intersection_1 = np.array([y1, x1])
+    intersection_2 = np.array([y2, x2])
+
+    if np.linalg.norm(intersection_1 - last_point) < np.linalg.norm(intersection_2 - last_point):
+        return intersection_1
+    else:
+        return intersection_2
 
 
 def angle_between(v1, v2):
@@ -378,55 +467,6 @@ def angle_between(v1, v2):
     dotproduct = np.clip(np.dot(v1_unit, v2_unit), -1.0, 1.0)
     angle = np.arccos(dotproduct) * 180 / np.pi
     return angle
-
-
-def ellipse_arm_pixel(pixels_arm, ellipsoid_coeff, z_h=0.5, first=False):
-    """ Add an additional pixel to the nucleosome arm where the vector between the last arm pixel and the ellipsoid
-    center intersect with the ellipse at a certain height. """
-
-    arm_vector = pixels_arm[-1] - ellipsoid_coeff[0:2]      # vector between center of ellipsoid and last arm pixel
-    phi = ellipsoid_coeff[5]
-
-    # Define parameters to calculate the r and c position along the ellipse
-    slope = arm_vector[0]/arm_vector[1]                     # row = slope * column
-    a_dash = ellipsoid_coeff[2] * np.sqrt(1 - z_h ** 2)
-    b_dash = ellipsoid_coeff[3] * np.sqrt(1 - z_h ** 2)
-    col = np.sqrt((b_dash ** 2 * (1 - z_h ** 2)) / (1 + b_dash ** 2 * slope ** 2 / a_dash ** 2))
-    row = np.sqrt(a_dash ** 2 * (1 - (col / b_dash) ** 2 - z_h ** 2))
-
-    # Depending on relative position of the arm pixel and the ellipse center the signs have to be adjusted
-    if arm_vector[0] <= 0:
-        row = -row
-    if arm_vector[1] <= 0:
-        col = -col
-
-    # Apply the rotation angle of the ellipsoid
-    ell_pixel = np.array([np.cos(-phi) * row - np.sin(-phi) * col + ellipsoid_coeff[0],
-                         -np.sin(-phi) * row + np.cos(-phi) * col + ellipsoid_coeff[1]])
-
-    # This is part of my ellipsoid fit problem fix - look at this to improve it
-    # Main problem: Rotation parameter phi of the fit is not really an angle. Can not find its physical meaning but
-    # The problem was that pixels on a rotated ellipse had somewhat wrong angles
-    # This fix doesn't solve it completely. Still yields a length error of about 0.01-0.05nm per arm. Angles are exact!
-    if first is False and np.linalg.norm(pixels_arm[-1] - ellipsoid_coeff[0:2]) >= np.linalg.norm(
-            ell_pixel - ellipsoid_coeff[0:2]):
-        ell_pixel = pixels_arm[-1] - arm_vector * np.linalg.norm(pixels_arm[-1] - ell_pixel)/np.linalg.norm(arm_vector)
-    elif first is False and np.linalg.norm(pixels_arm[-1] - ellipsoid_coeff[0:2]) < np.linalg.norm(
-            ell_pixel - ellipsoid_coeff[0:2]):
-        ell_pixel = pixels_arm[-1] + arm_vector * np.linalg.norm(pixels_arm[-1] - ell_pixel) / np.linalg.norm(
-            arm_vector)
-
-    # makes the ellipse pixels more accurately but also computationally heavy
-    # if first is False:
-    #     ellipse_points = plot.ellipse_points(x0=ellipsoid_coeff[0], y0=ellipsoid_coeff[1],
-    #                                          a=ellipsoid_coeff[2], b=ellipsoid_coeff[3],
-    #                                          phi=ellipsoid_coeff[5], z_h=z_h)
-    #     dists = [np.linalg.norm(ell_pixel - point) for point in ellipse_points]
-    #     ell_pixel = ell_pixel + (ellipsoid_coeff[0:2] - ell_pixel) / np.linalg.norm(ellipsoid_coeff[0:2] - ell_pixel) * min(dists)
-
-    # ellipse_pixel = np.array([row + ellipsoid_coeff[0], col + ellipsoid_coeff[1]])
-
-    return ell_pixel
 
 
 def wiggins_pixel_height_analysis(pixels, mol_filtered, pixel_size):
@@ -469,171 +509,9 @@ def dna_orientation(wiggins_pixels, mol_bbox):
     return orientation_pars
 
 
-def bending_behaviour(wiggins_pixels):
-
-    distances = [np.linalg.norm(wiggins_pixels[i + 1] - wiggins_pixels[i]) for i in range(0, len(wiggins_pixels) - 1)]
-    vectors = [wiggins_pixels[i + 1] - wiggins_pixels[i] for i in range(0, len(wiggins_pixels) - 1)]
-    angles = [angle_between(vectors[i + 1], vectors[i]) for i in range(0, len(vectors) - 1)]
-
-    bending_avg = np.sum(angles[:-1])/len(angles[:-1])
-
-    bending_pars = {'bending_avg': bending_avg}
-
-    return bending_pars
-
-
 def rotate_vector(vector, theta):
 
     R = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
     vec_rotated = np.dot(R, vector)
 
     return vec_rotated
-
-
-def interp_tracing(mol_original, skel_arm_pixels, ellipsoid_pixels):
-
-    interp_function, failed = get_interp_function(mol_original, skel_arm_pixels[0])
-    # strand_points = [find_best_position(interp_function, skel_arm_pixels[0])]
-    strand_points = [np.asarray(skel_arm_pixels[0])]
-    direction_guess = skel_arm_pixels[3] - strand_points[-1]
-    next_position = find_next_position(interp_function, strand_points[-1], direction_guess)
-    next_best = find_best_position(interp_function, next_position)
-    strand_points.append(
-        strand_points[-1] + (next_best - strand_points[-1]) / np.linalg.norm(next_best - strand_points[-1]))
-    while not (ellipsoid_pixels == np.round(strand_points[-1])).all(1).any() and not failed:
-        interp_function, failed = get_interp_function(mol_original, strand_points[-1])
-        next_position = find_next_position(interp_function, strand_points[-1], strand_points[-1] - strand_points[-2])
-        next_best = find_best_position(interp_function, next_position, strand=strand_points)
-        strand_points.append(
-            strand_points[-1] + (next_best - strand_points[-1]) / np.linalg.norm(next_best - strand_points[-1]))
-        if len(strand_points) > 200:
-            failed = True
-            break
-        if failed is True:
-            break
-
-    return strand_points, failed
-
-
-def interp_tracing_end(mol_original, strand_points, ellipsoid_pixels, failed=False, seg_length=3.41):
-
-    try: # make this try stuff better
-        while not (ellipsoid_pixels == np.round(strand_points[-1])).all(1).any() and not failed:
-            interp_function, failed = get_interp_function(mol_original, strand_points[-1])
-            next_position = find_next_position(interp_function, strand_points[-1], strand_points[-1] - strand_points[-2])
-            next_best = find_best_position(interp_function, next_position, strand=strand_points)
-            strand_points.append(
-                strand_points[-1] + (next_best - strand_points[-1]) / np.linalg.norm(next_best - strand_points[-1]))
-            if len(strand_points) > 200:
-                failed = True
-                break
-            if failed is True:
-                break
-    except:
-        failed = True
-
-    # Now place 5 nm segments along the strand_points
-    strand_points_segs = [strand_points[0]]
-    points_itp_trace = copy.deepcopy(strand_points[1:])
-    seg_length = 2
-    while points_itp_trace:
-        distances = [np.linalg.norm(points_itp_trace[i] - strand_points_segs[-1]) for i in range(0, len(points_itp_trace))]
-        for i in range(0, len(distances)):
-            if distances[i] >= seg_length:
-                direction = points_itp_trace[i] - points_itp_trace[i - 1]
-                line_coords = [np.array([points_itp_trace[i - 1][0] + factor * direction[0],
-                                         points_itp_trace[i - 1][1] + factor * direction[1]])
-                               for factor in np.linspace(0, 1, 11)]
-                distances_line_coords = [np.linalg.norm(line_coords[j] - points_itp_trace[0])
-                                         for j in range(0, len(line_coords))]
-                index = np.argmin(abs(np.asarray(distances_line_coords) - seg_length))
-                strand_points_segs.append(strand_points_segs[-1] + seg_length * (line_coords[index] - strand_points_segs[-1])/np.linalg.norm(line_coords[index] - strand_points_segs[-1]))
-                break
-        del points_itp_trace[0:i+1]
-
-    return strand_points_segs, failed
-
-
-def find_best_position(interp_function, next_position, strand=None, line_points=11, thetas_num=13):
-    """ At a given point, use lines to interpolate the height_profile and compute the best position along those """
-    if strand is None:
-        unit_vector = np.array([1., 0.])
-        thetas = np.linspace(0, np.pi - np.pi / 18, thetas_num)
-    else:
-        unit_vector = strand[-1] - strand[-2]
-        thetas = np.linspace(np.pi*3.5 / 9, np.pi*5.5 / 9, thetas_num)
-
-    # Define the lines and coordinates/height values along those lines
-    line_straight = [np.array([next_position[0] + factor * unit_vector[0], next_position[1] + factor * unit_vector[1]])
-                     for factor in np.linspace(-2.0, 2.0, line_points)]
-    lines_coords = [np.asarray([rotate_vector(point - next_position, theta) + next_position for point in line_straight])
-                    for theta in thetas]
-    height_values = [interp_function(line[:, 0], line[:, 1]) for line in lines_coords]
-
-    # Use the mean of the slopes of each line to find the one with the maximum slope, this one should be the best
-    slopes = [np.mean(abs(np.asarray([heights[i + 1] - heights[i] for i in range(0, len(heights) - 1)])))
-              for heights in height_values]
-    # Apply weights: the perpendicular line should be weighed the most and the ones rotated the most have less weight
-    if strand is not None:
-        weights = np.linspace(0.5, 1.0, int(np.ceil(thetas_num/2)))
-        weights = np.hstack((weights, weights[::-1][1::]))
-        slopes = weights * np.asarray(slopes)
-    line_best = lines_coords[np.argmax(slopes)]
-    height_values_best = height_values[np.argmax(slopes)]
-
-
-    # Fit Gaussian to the best height values and use peak position to calculate new position
-    try:
-        coeff, var_matrix = curve_fit(gauss_function, np.linspace(0, 10, line_points), height_values_best, p0=[1., 5., 2.])
-        best_position = line_best[0, :] + coeff[1]/10 * (line_best[-1, :] - line_best[0, :])
-    except:
-        best_position = next_position
-
-    if strand is not None:
-        angle = angle_between(strand[-1] - strand[-2], best_position - strand[-1])
-        if angle >= 20:
-            overrotation = (angle - 19.99)/180 * np.pi
-            best_position_new = strand[-1] + rotate_vector(best_position - strand[-1], overrotation)
-            if angle_between(strand[-1] - strand[-2], best_position_new - strand[-1]) >= 20:
-                best_position_new = strand[-1] + rotate_vector(best_position - strand[-1], -overrotation)
-            best_position = copy.deepcopy(best_position_new)
-
-    return best_position
-
-
-def find_next_position(interp_function, curr_position, direction_guess, line_points=11, thetas_num=13):
-
-    direction_guess = direction_guess/np.linalg.norm(direction_guess)
-    line_straight = [np.array([curr_position[0] + factor * direction_guess[0],
-                               curr_position[1] + factor * direction_guess[1]])
-                     for factor in np.linspace(0, 2, line_points)]
-    thetas = np.linspace(-np.pi/6, np.pi/6, thetas_num)
-    lines_coords = [np.asarray([rotate_vector(point - curr_position, theta) + curr_position for point in line_straight])
-                    for theta in thetas]
-    height_values = [interp_function(line[:, 0], line[:, 1]) for line in lines_coords]
-
-    # Calculate slopes, the way it is done they can be negative as well thus add the negative threshold before weighing
-    slopes = [np.mean(np.asarray([heights[i + 1] - heights[i] for i in range(0, len(heights) - 1)]))
-              for heights in height_values]
-    slopes = np.asarray(slopes) + abs(max(slopes))
-    weights = np.linspace(0.5, 1.0, int(np.ceil(thetas_num/2)))
-    weights = np.hstack((weights, weights[::-1][1::]))
-    theta = thetas[np.argmax(slopes * weights)]
-    direction = rotate_vector(direction_guess, theta)
-
-    return curr_position + direction/np.linalg.norm(direction)
-
-
-def get_interp_function(mol_original, position, grid_size=5, failed=False):
-
-    r = int(position[0])
-    c = int(position[1])
-    if mol_original[r, c] <= 0.05:
-        failed = True
-    rr = np.linspace(r - grid_size, r + grid_size, 2 * grid_size + 1)
-    cc = np.linspace(c - grid_size, c + grid_size, 2 * grid_size + 1)
-    cc, rr = np.meshgrid(cc, rr)
-    height_grid = copy.deepcopy(mol_original[r - grid_size: r + grid_size + 1,
-                                c - grid_size: c + grid_size + 1])
-
-    return interp.Rbf(rr, cc, height_grid, function='linear'), failed

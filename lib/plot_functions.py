@@ -3,12 +3,11 @@
 import copy
 import os
 
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
 import cv2
-
-import analysis_functions as analysis
 
 
 def plot_overview_image(img_filtered,
@@ -16,129 +15,82 @@ def plot_overview_image(img_filtered,
                         results_final,
                         analyze_bare_DNA=False,
                         analyze_nucleosomes=False,
-                        analyze_nucleosomes_eb=False,
-                        analyze_ints=False):
-    """ Plot over image with all analyzed molecules marked """
+                        analyze_nucleosomes_eb=False
+                        ):
+    """ Plot overview image with all analyzed molecules marked """
 
-    my_colormap = create_custom_colormap()
+    my_colormap = create_custom_colormap_2()
     fig = plt.figure(figsize=plt.figaspect(0.5))
-    fig.add_subplot(1, 1, 1)
+    ax = fig.add_subplot(1, 1, 1)
     plt.imshow(img_filtered, interpolation='None', cmap=my_colormap)
 
     # Plot the analyzed bare DNA
     if analyze_bare_DNA is True:
-        analyzed_bare_DNA = results_final['analyzed_bare_DNA']
 
+        analyzed_bare_DNA = results_final['analyzed_bare_DNA']
         dna_succeeded = [mol for mol in analyzed_bare_DNA if mol.results['failed'] is False]
         dna_failed = [mol for mol in analyzed_bare_DNA if mol.results['failed'] is True]
+
         for mol in dna_succeeded:
             if mol.results['length_fwd'] is not False:
-                wiggins_pixels = copy.deepcopy(mol.results['wiggins_pixels_fwd'])
+                trace_points = copy.deepcopy(mol.results['wigg_fwd'])
             else:
-                wiggins_pixels = copy.deepcopy(mol.results['wiggins_pixels_bwd'])
-            pixels_img = np.asarray([np.array([r - 10 + mol.mol_bbox[0], c - 10 + mol.mol_bbox[1]])
-                                     for r, c in wiggins_pixels])
-            plt.plot(pixels_img[:, 1], pixels_img[:, 0], color='#FB6542', linewidth=1.5)
+                trace_points = copy.deepcopy(mol.results['wigg_bwd'])
+            plot_trace_points(trace_points, mol, color='#FFDB5C', linewidth=1.5)
 
-        for mol in dna_failed:
-            wiggins_pixels = copy.deepcopy(mol.results['wiggins_pixels_fwd'])
-            pixels_img = np.asarray([np.array([r - 10 + mol.mol_bbox[0], c - 10 + mol.mol_bbox[1]])
-                                     for r, c in wiggins_pixels])
-            plt.plot(pixels_img[:, 1], pixels_img[:, 0], color='#FF420E')
-            wiggins_pixels = copy.deepcopy(mol.results['wiggins_pixels_bwd'])
-            pixels_img = np.asarray([np.array([r - 10 + mol.mol_bbox[0], c - 10 + mol.mol_bbox[1]])
-                                     for r, c in wiggins_pixels])
-            plt.plot(pixels_img[:, 1], pixels_img[:, 0], color='#FF420E')
+        # for mol in dna_failed:
+        #     plot_trace_points(copy.deepcopy(mol.results['wigg_fwd']), mol, color='#FB6542', linewidth=1.5)
+        #     plot_trace_points(copy.deepcopy(mol.results['wigg_bwd']), mol, color='#FB6542', linewidth=1.5)
 
     # Plot all nucleosomes
     if analyze_nucleosomes is True:
-        analyzed_nucleosomes = results_final['analyzed_nucleosomes']
 
+        analyzed_nucleosomes = results_final['analyzed_nucleosomes']
         nuc_succeeded = [mol for mol in analyzed_nucleosomes if mol.results['failed'] is False]
-        failed = [mol for mol in analyzed_nucleosomes if mol.results['failed'] is True]
+        nuc_failed = [mol for mol in analyzed_nucleosomes if mol.results['failed'] is True]
+
         for mol in nuc_succeeded:
 
             # Plot the Wiggins trace
-            pixels_arm1 = copy.deepcopy(mol.results['pixels_arm1'])
-            pixels_img = np.asarray([np.array([r - 10 + mol.mol_bbox[0], c - 10 + mol.mol_bbox[1]])
-                                     for r, c in pixels_arm1])
-            plt.plot(pixels_img[:, 1], pixels_img[:, 0], color='#FFBB00', linewidth=1.5)
-            pixels_arm2 = copy.deepcopy(mol.results['pixels_arm2'])
-            pixels_img = np.asarray([np.array([r - 10 + mol.mol_bbox[0], c - 10 + mol.mol_bbox[1]])
-                                     for r, c in pixels_arm2])
-            plt.plot(pixels_img[:, 1], pixels_img[:, 0], color='#FFBB00', linewidth=1.5)
+            points_arm1 = copy.deepcopy(mol.results['pixels_arm1'])
+            points_arm2 = copy.deepcopy(mol.results['pixels_arm2'])
+            plot_trace_points(points_arm1, mol, color='#FA812F', linewidth=1.5)
+            plot_trace_points(points_arm2, mol, color='#FA812F', linewidth=1.5)
 
             # Plot the angle
-            ellipsoid_coeff = mol.results['ellipsoid_coeff']
-            pixel_center = ellipsoid_coeff[0:2]
-            pixels_angle = np.array([[pixels_arm1[-1][0] - 10 + mol.mol_bbox[0],
-                                      pixels_arm1[-1][1] - 10 + mol.mol_bbox[1]],
-                                     [pixel_center[0] - 10 + mol.mol_bbox[0],
-                                      pixel_center[1] - 10 + mol.mol_bbox[1]],
-                                     [pixels_arm2[-1][0] - 10 + mol.mol_bbox[0],
-                                      pixels_arm2[-1][1] - 10 + mol.mol_bbox[1]]])
-            plt.plot(pixels_angle[:, 1], pixels_angle[:, 0], color='#FFBB00', linewidth=1.5)
+            ell_data = mol.results['ell_data']
+            center = ell_data['center']
+            points_angle = np.array([[points_arm1[-1][0] - 10 + mol.mol_pars['mol_bbox'][0],
+                                      points_arm1[-1][1] - 10 + mol.mol_pars['mol_bbox'][1]],
+                                     [center[0] - 10 + mol.mol_pars['mol_bbox'][0],
+                                      center[1] - 10 + mol.mol_pars['mol_bbox'][1]],
+                                     [points_arm2[-1][0] - 10 + mol.mol_pars['mol_bbox'][0],
+                                      points_arm2[-1][1] - 10 + mol.mol_pars['mol_bbox'][1]]])
+            plt.plot(points_angle[:, 1], points_angle[:, 0], color='#FA812F', linewidth=1.5)
 
             # Plot the nucleosome ellipses
-            pixels_ellipse = ellipse_points(x0=ellipsoid_coeff[0], y0=ellipsoid_coeff[1],
-                                            a=ellipsoid_coeff[2], b=ellipsoid_coeff[3],
-                                            phi=ellipsoid_coeff[5], z_h=0)
-            plt.plot(pixels_ellipse[:, 1] - 10 + mol.mol_bbox[1],
-                     pixels_ellipse[:, 0] - 10 + mol.mol_bbox[0], color='#FFBB00', linewidth=1.5)
+            ax.add_patch(plot_ellipse(ell_data, mol, ell_cutoff=0, edgecolor='#FA812F'))
+            ax.add_patch(plot_ellipse(ell_data, mol, ell_cutoff=0.6, edgecolor='#FA812F'))
 
-            pixels_ellipse = ellipse_points(x0=ellipsoid_coeff[0], y0=ellipsoid_coeff[1],
-                                            a=ellipsoid_coeff[2], b=ellipsoid_coeff[3],
-                                            phi=ellipsoid_coeff[5], z_h=0.6)
-            plt.plot(pixels_ellipse[:, 1] - 10 + mol.mol_bbox[1],
-                     pixels_ellipse[:, 0] - 10 + mol.mol_bbox[0], color='#FFBB00', linewidth=1.5)
-
-            # plt.scatter(mol.results['ellipsoid_coeff'][1] - 10 + mol.mol_bbox[1],
-            #             mol.results['ellipsoid_coeff'][0] - 10 + mol.mol_bbox[0])
-
-        for mol in failed:
-            # Check that the ellipsoid fit worked, otherwise don't try plotting since arms weren't traced
-            if 'pixels_arm1' and 'pixels_arm2' in mol.results:
-                # Plot the Wiggins trace
-                pixels_arm1 = copy.deepcopy(mol.results['pixels_arm1'])
-                if pixels_arm1 is not False:
-                    pixels_img = np.asarray([np.array([r - 10 + mol.mol_bbox[0], c - 10 + mol.mol_bbox[1]])
-                                             for r, c in pixels_arm1])
-                    plt.plot(pixels_img[:, 1], pixels_img[:, 0], color='#FF420E')
-
-                pixels_arm2 = copy.deepcopy(mol.results['pixels_arm2'])
-                if pixels_arm2 is not False:
-                    pixels_img = np.asarray([np.array([r - 10 + mol.mol_bbox[0], c - 10 + mol.mol_bbox[1]])
-                                             for r, c in pixels_arm2])
-                    plt.plot(pixels_img[:, 1], pixels_img[:, 0], color='#FF420E')
+        # for mol in nuc_failed:
+        #     # Check that the ellipsoid fit worked, otherwise don't try plotting since arms weren't traced
+        #     if 'pixels_arm1' and 'pixels_arm2' in mol.results:
+        #         plot_trace_points(copy.deepcopy(mol.results['pixels_arm1']), mol, color='#FF420E', linewidth=1.5)
+        #         plot_trace_points(copy.deepcopy(mol.results['pixels_arm2']), mol, color='#FF420E', linewidth=1.5)
 
     # Plot all endbound nucleosomes
     if analyze_nucleosomes_eb is True:
         analyzed_nucleosomes_eb = results_final['analyzed_nucleosomes_eb']
-
         nuc_succeeded = [mol for mol in analyzed_nucleosomes_eb if mol.results['failed'] is False]
-        failed = [mol for mol in analyzed_nucleosomes_eb if mol.results['failed'] is True]
 
         for mol in nuc_succeeded:
 
             # Plot the Wiggins trace
-            pixels_arm1 = copy.deepcopy(mol.results['pixels_arm1'])
-            pixels_img = np.asarray([np.array([r - 10 + mol.mol_bbox[0], c - 10 + mol.mol_bbox[1]])
-                                     for r, c in pixels_arm1])
-            plt.plot(pixels_img[:, 1], pixels_img[:, 0], color='#F98866')
+            plot_trace_points(copy.deepcopy(mol.results['pixels_arm1']), mol, color='green', linewidth=1.5)
 
-            # Plot the nucleosome ellipses
-            ellipsoid_coeff = mol.results['ellipsoid_coeff']
-            pixels_ellipse = ellipse_points(x0=ellipsoid_coeff[0], y0=ellipsoid_coeff[1],
-                                            a=ellipsoid_coeff[2], b=ellipsoid_coeff[3],
-                                            phi=ellipsoid_coeff[5], z_h=0)
-            plt.plot(pixels_ellipse[:, 1] - 10 + mol.mol_bbox[1],
-                     pixels_ellipse[:, 0] - 10 + mol.mol_bbox[0], color='#F98866')
-
-            pixels_ellipse = ellipse_points(x0=ellipsoid_coeff[0], y0=ellipsoid_coeff[1],
-                                            a=ellipsoid_coeff[2], b=ellipsoid_coeff[3],
-                                            phi=ellipsoid_coeff[5], z_h=0.6)
-            plt.plot(pixels_ellipse[:, 1] - 10 + mol.mol_bbox[1],
-                     pixels_ellipse[:, 0] - 10 + mol.mol_bbox[0], color='#F98866')
+            ell_data = mol.results['ell_data']
+            ax.add_patch(plot_ellipse(ell_data, mol, ell_cutoff=0, edgecolor='green'))
+            ax.add_patch(plot_ellipse(ell_data, mol, ell_cutoff=0.6, edgecolor='green'))
 
     plt.show()
     fig.savefig(file_name + '_overview.png', bbox_inches='tight')
@@ -151,7 +103,6 @@ def plot_save_close_ups(results_final,
                         analyze_bare_DNA=False,
                         analyze_nucleosomes=False,
                         analyze_nucleosomes_eb=False,
-                        analyze_ints=False,
                         plot_trash=False):
 
     my_colormap = create_custom_colormap()
@@ -173,25 +124,23 @@ def plot_save_close_ups(results_final,
             mol_filtered_rgb = convert_to_rgb(mol.mol_filtered, my_colormap)
 
             if mol.results['length_fwd'] is not False:
-                wiggins_pixels = copy.deepcopy(mol.results['wiggins_pixels_fwd'])
+                wiggins_pixels = copy.deepcopy(mol.results['wigg_fwd'])
             elif mol.results['length_bwd'] is not False:
-                wiggins_pixels = copy.deepcopy(mol.results['wiggins_pixels_bwd'])
+                wiggins_pixels = copy.deepcopy(mol.results['wigg_bwd'])
 
             plt.imshow(mol_filtered_rgb, interpolation='None')
 
             if mol.results['failed'] is False:
-                plot_wiggins_pixels_close_up(wiggins_pixels)
+                plot_trace_points_close_up(wiggins_pixels)
                 name = file_name + '/bare_DNA/' + repr(count) + '.png'
-                plt.text(2, 6, 'Length: ' + repr(np.round(mol.results['length_avg'], decimals=1))
-                         + ' nm', color='white', fontsize=12)
+                plot_text(['length_avg'], mol, pos=6)
                 count += 1
             else:
                 name = file_name + '/bare_DNA/failed/' + repr(count_failed) + '_failed.png'
                 if mol.results['failed_reason'] == 'Discarded manually':
-                    plot_wiggins_pixels_close_up(wiggins_pixels)
-                    plt.text(2, 6, 'Length: ' + repr(np.round(mol.results['length_avg'], decimals=1))
-                             + ' nm', color='white', fontsize=12)
-                plt.text(2, 3, 'Discard reason: ' + mol.results['failed_reason'], color='white', fontsize=12)
+                    plot_trace_points_close_up(wiggins_pixels)
+                    plot_text(['length_avg'], mol, pos=6)
+                plot_text(['failed_reason'], mol)
                 count_failed += 1
             fig.savefig(name, bbox_inches='tight')
 
@@ -209,35 +158,27 @@ def plot_save_close_ups(results_final,
         for mol in analyzed_nucleosomes:
             # Check that the ellipsoid fit worked, otherwise don't try plotting since arms weren't traced
             if 'pixels_arm1' and 'pixels_arm2' in mol.results:
-                fig = plt.figure()
+                fig, ax = plt.subplots(1, 1)
                 plt.axis('off')
                 mol_filtered_rgb = convert_to_rgb(mol.mol_filtered, my_colormap)
 
-                plot_wiggins_pixels_close_up(mol.results['pixels_arm1'])
-                plot_wiggins_pixels_close_up(mol.results['pixels_arm2'])
-                plot_ellipse_close_up(mol.results['ellipsoid_coeff'])
-                plt.scatter(mol.results['ellipsoid_coeff'][1], mol.results['ellipsoid_coeff'][0], color='#2A3132')
+                plot_trace_points_close_up(mol.results['pixels_arm1'])
+                plot_trace_points_close_up(mol.results['pixels_arm2'])
+
+                ell_data = mol.results['ell_data']
+                ax.add_patch(plot_ellipse_close_up(ell_data, ell_cutoff=0, edgecolor='#FFBB00'))
+                ax.add_patch(plot_ellipse_close_up(ell_data, ell_cutoff=0.6, edgecolor='#FFBB00'))
                 plt.imshow(mol_filtered_rgb, interpolation='None')
 
                 if mol.results['failed'] is False:
                     name = file_name + '/nucleosomes/' + repr(count) + '.png'
-                    plt.text(2, 3, 'Arm sum: ' + repr(np.round(mol.results['length_sum'], decimals=1))
-                             + ' nm', color='white', fontsize=10)
-                    plt.text(2, 6, 'Angle: ' + repr(np.round(mol.results['angle_arms'], decimals=1))
-                             + ' Degree', color='white', fontsize=10)
-                    plt.text(2, 9, 'Volume: ' + repr(np.round(mol.results['nucleosome_volume'], decimals=1))
-                             + ' nm^3', color='white', fontsize=10)
+                    plot_text(['length_sum', 'angle_arms', 'nucleosome_volume'], mol)
                     count += 1
                 else:
                     name = file_name + '/nucleosomes/failed/' + repr(count_failed) + '_failed.png'
-                    plt.text(2, 3, 'Discard reason: ' + mol.results['failed_reason'], color='white', fontsize=12)
+                    plot_text(['failed_reason'], mol)
                     if mol.results['failed_reason'] == 'Discarded manually':
-                        plt.text(2, 6, 'Arm sum: ' + repr(np.round(mol.results['length_sum'], decimals=1))
-                                 + ' nm', color='white', fontsize=10)
-                        plt.text(2, 9, 'Angle: ' + repr(np.round(mol.results['angle_arms'], decimals=1))
-                                 + ' Degree', color='white', fontsize=10)
-                        plt.text(2, 12, 'Volume: ' + repr(np.round(mol.results['nucleosome_volume'], decimals=1))
-                                 + ' nm^3', color='white', fontsize=10)
+                        plot_text(['length_sum', 'angle_arms', 'nucleosome_volume'], mol, pos=6)
                     count_failed += 1
                 fig.savefig(name, bbox_inches='tight')
             else:
@@ -255,97 +196,32 @@ def plot_save_close_ups(results_final,
 
         for mol in analyzed_nucleosomes_eb:
 
-            fig = plt.figure()
+            fig, ax = plt.subplots(1, 1)
             plt.axis('off')
             mol_filtered_rgb = convert_to_rgb(mol.mol_filtered, my_colormap)
             plt.imshow(mol_filtered_rgb, interpolation='None')
 
             if mol.results['failed'] is False:
-                plot_wiggins_pixels_close_up(mol.results['pixels_arm1'])
-                plot_ellipse_close_up(mol.results['ellipsoid_coeff'])
-                plt.scatter(mol.results['ellipsoid_coeff'][1], mol.results['ellipsoid_coeff'][0], color='#2A3132')
+                ell_data = mol.results['ell_data']
+                plot_trace_points_close_up(mol.results['pixels_arm1'])
+                ax.add_patch(plot_ellipse_close_up(ell_data, ell_cutoff=0, edgecolor='#FFBB00'))
+                ax.add_patch(plot_ellipse_close_up(ell_data, ell_cutoff=0.6, edgecolor='#FFBB00'))
 
                 name = file_name + '/nucleosomes_eb/' + repr(count) + '.png'
-                plt.text(2, 3, 'Arm: ' + repr(np.round(mol.results['length_arm1'], decimals=1))
-                         + ' nm', color='white', fontsize=10)
-                plt.text(2, 6, 'Volume: ' + repr(np.round(mol.results['nucleosome_volume'], decimals=1))
-                         + ' nm^3', color='white', fontsize=10)
+                plot_text(['length_arm1_60', 'nucleosome_volume'], mol)
                 count += 1
             else:
                 name = file_name + '/nucleosomes_eb/failed/' + repr(count_failed) + '_failed.png'
-                plt.text(2, 3, 'Discard reason: ' + mol.results['failed_reason'], color='white', fontsize=12)
-                if mol.results['failed_reason'] == 'Discarded manually':
-                    plot_wiggins_pixels_close_up(mol.results['pixels_arm1'])
-                    plot_ellipse_close_up(mol.results['ellipsoid_coeff'])
-                    plt.scatter(mol.results['ellipsoid_coeff'][1], mol.results['ellipsoid_coeff'][0], color='#2A3132')
-                    plt.text(2, 6, 'Arm: ' + repr(np.round(mol.results['length_arm1'], decimals=1))
-                             + ' nm', color='white', fontsize=10)
-                    plt.text(2, 9, 'Volume: ' + repr(np.round(mol.results['nucleosome_volume'], decimals=1))
-                             + ' nm^3', color='white', fontsize=10)
-                count_failed += 1
+                if 'failed_reason' in mol.results:
+                    plot_text(['failed_reason'], mol)
+                    if mol.results['failed_reason'] == 'Discarded manually':
+                        plot_trace_points_close_up(mol.results['pixels_arm1'])
+                        ax.add_patch(plot_ellipse_close_up(ell_data, ell_cutoff=0, edgecolor='#FFBB00'))
+                        ax.add_patch(plot_ellipse_close_up(ell_data, ell_cutoff=0.6, edgecolor='#FFBB00'))
+                        plot_text(['length_arm1_60', 'nucleosome_volume'], mol, pos=6)
+                    count_failed += 1
             fig.savefig(name, bbox_inches='tight')
 
-            plt.close()
-
-    if analyze_ints is True:
-        analyzed_ints = results_final['analyzed_ints']
-        if not os.path.exists(file_name + '/ints'):
-            os.makedirs(file_name + '/ints')
-            os.makedirs(file_name + '/ints/failed')
-            os.makedirs(file_name + '/ints/ascii')
-            os.makedirs(file_name + '/ints/failed/ascii')
-        count = 0
-        count_failed = 0
-
-        for mol in analyzed_ints:
-            header = 'File Format = ASCII\n'
-            header = header + 'x-pixels = ' + repr(np.shape(mol.mol_filtered)[1]) + '\n'
-            header = header + 'y-pixels = ' + repr(np.shape(mol.mol_filtered)[0]) + '\n'
-            header = header + 'x-length = ' + repr(
-                np.round(np.shape(mol.mol_filtered)[1] * mol.pixel_size, decimals=2)) + '\n'
-            header = header + 'y-length = ' + repr(
-                np.round(np.shape(mol.mol_filtered)[0] * mol.pixel_size, decimals=2)) + '\n'
-            header = header + 'x-offset = ' + repr(mol.mol_bbox[1]) + '\n'
-            header = header + 'y-offset = ' + repr(mol.mol_bbox[0]) + '\n'
-            header = header + 'z-unit = nm\n'
-            header = header + 'Start of Data:'
-
-            fig = plt.figure()
-            plt.axis('off')
-            mol_filtered_rgb = convert_to_rgb(mol.mol_filtered, my_colormap)
-            plt.imshow(mol_filtered_rgb, interpolation='None')
-
-            if mol.results['failed'] is False:
-                plot_ellipse_close_up([mol.results['com_r'], mol.results['com_c'],
-                                       mol.results['radius_of_gyration'], mol.results['radius_of_gyration'],
-                                       0, 0], double=False)
-                if mol.results['com_core_r'] != 0:
-                    plot_ellipse_close_up([mol.results['com_core_r'], mol.results['com_core_c'],
-                                           mol.results['radius_of_gyration_core'], mol.results['radius_of_gyration_core'],
-                                           0, 0], double=False)
-                if mol.results['ellipsoid_height'] != 0:
-                    plot_ellipse_close_up(mol.results['ellipsoid_coeff'], color='black')
-                    plt.scatter(mol.results['ellipsoid_coeff'][1], mol.results['ellipsoid_coeff'][0],
-                                color='#2A3132')
-
-                name = file_name + '/ints/' + repr(count) + '.png'
-                plt.text(2, 6, 'RoG: ' + repr(np.round(mol.results['radius_of_gyration'], decimals=1)),
-                         color='white', fontsize=10)
-                plt.text(2, 21, 'RoG Core: ' + repr(np.round(mol.results['radius_of_gyration_core'], decimals=1)),
-                         color='white', fontsize=10)
-
-                # save ascii
-                ascname = file_name + '/ints/ascii/' + repr(count) + '.asc'
-                np.savetxt(ascname, mol.mol_filtered, delimiter='\t', header=header)
-                count += 1
-
-            else:
-                name = file_name + '/ints/failed/' + repr(count_failed) + '_failed.png'
-                ascname = file_name + '/ints/failed/ascii/' + repr(count_failed) + '.asc'
-                np.savetxt(ascname, mol.mol_filtered, delimiter='\t', header=header)
-                count_failed += 1
-
-            fig.savefig(name, bbox_inches='tight')
             plt.close()
 
     # Plot all molecules that were categorized as trash
@@ -404,6 +280,50 @@ def create_custom_colormap(midpoint=0.35):
     return my_colormap
 
 
+def create_custom_colormap_2(midpoint=0.2):
+    """ Define a self-made colormap starting at #375E97 going to 1.0 and ending at #D61800 """
+
+    color_dict = {'red': ((0.0, 0.0, 0.024),
+                          (midpoint, 1.0, 1.0),
+                          (1.0, 0.976, 0)),
+
+                  'green': ((0.0, 0.0, 0.220),
+                            (midpoint, 1.0, 1.0),
+                            (1.0, 0.651, 0)),
+
+                  'blue': ((0.0, 0.0, 0.322),
+                           (midpoint, 1.0, 1.0),
+                           (1.0, 0.012, 0))
+                  }
+
+    my_colormap = LinearSegmentedColormap('my_colormap', color_dict)
+    plt.register_cmap(cmap=my_colormap)
+
+    return my_colormap
+
+
+def create_custom_colormap_3(midpoint=0.30):
+    """ Define a self-made colormap starting at #375E97 going to 1.0 and ending at #D61800 """
+
+    color_dict = {'red': ((0.0, 0.0, 0.754),
+                          (midpoint, 1.0, 1.0),
+                          (1.0, 0.976, 0)),
+
+                  'green': ((0.0, 0.0, 0.816),
+                            (midpoint, 1.0, 1.0),
+                            (1.0, 0.651, 0)),
+
+                  'blue': ((0.0, 0.0, 0.922),
+                           (midpoint, 1.0, 1.0),
+                           (1.0, 0.012, 0))
+                  }
+
+    my_colormap = LinearSegmentedColormap('my_colormap', color_dict)
+    plt.register_cmap(cmap=my_colormap)
+
+    return my_colormap
+
+
 def convert_to_rgb(mol_filtered, my_colormap):
     """ Converts a greyscale img to RGB and scales it properly to a colormap"""
 
@@ -443,19 +363,28 @@ def cv_apply_custom_colormap(image_gray, cmap=plt.get_cmap('seismic')):
     return np.dstack(channels)
 
 
-def ellipse_points(x0, y0, a, b, phi=0, z_h=0.67):
-    """ Calculate the points along the ellipse at a certain height of the ellipsoid """
+def plot_trace_points(arm_pixels, mol, color='#FB6542', linewidth=1.5):
 
-    # define possible x-values, add/substract small number at the ends to prevent negative sqrt
-    x = np.linspace(-a * (1 - z_h ** 2) + 0.0001, a * (1 - z_h ** 2) - 0.0001, 5000)
-    y_pos = np.sqrt(b ** 2 * (1 - z_h ** 2) * (1 - x ** 2 / (a ** 2 * (1 - z_h ** 2)) - z_h ** 2))
-    points = np.hstack((np.array([np.cos(-phi) * x - np.sin(-phi) * y_pos + x0, -np.sin(-phi) * x + np.cos(-phi) * y_pos + y0]),
-                        np.flip(np.array([np.cos(-phi) * x - np.sin(-phi) * -y_pos + x0, -np.sin(-phi) * x + np.cos(-phi) * -y_pos + y0]), axis=1)))
+    points = np.asarray([np.array([r - 10 + mol.mol_pars['mol_bbox'][0], c - 10 + mol.mol_pars['mol_bbox'][1]])
+                         for r, c in arm_pixels])
+    plt.plot(points[:, 1], points[:, 0], color=color, linewidth=linewidth)
 
-    return points.T
+    return
 
 
-def plot_wiggins_pixels_close_up(pixels):
+def plot_ellipse(ell_data, mol, ell_cutoff=0, edgecolor='#FFBB00'):
+
+    center = ell_data['center']
+    a, b, c = ell_data['abc']
+    ell_plot_patch = matplotlib.patches.Ellipse((center[1] - 10 + mol.mol_pars['mol_bbox'][1],
+                                                 center[0] - 10 + mol.mol_pars['mol_bbox'][0]),
+                                                2 * a * (1 - ell_cutoff ** 2), 2 * b * (1 - ell_cutoff ** 2),
+                                                angle=-ell_data['rot_angle'] * 180 / np.pi,
+                                                facecolor='None', edgecolor=edgecolor)
+    return ell_plot_patch
+
+
+def plot_trace_points_close_up(pixels):
 
     wiggins_pixels = copy.deepcopy(pixels)
     pixels_img = np.asarray([np.array([r, c])
@@ -465,28 +394,27 @@ def plot_wiggins_pixels_close_up(pixels):
     return
 
 
-def plot_ellipse_close_up(ellipsoid_coeff, double=True, color='#FFBB00'):
+def plot_ellipse_close_up(ell_data, ell_cutoff=0, edgecolor='#FFBB00'):
 
-    # Plot the nucleosome ellipses
-    pixels_ellipse = ellipse_points(x0=ellipsoid_coeff[0], y0=ellipsoid_coeff[1],
-                                    a=ellipsoid_coeff[2], b=ellipsoid_coeff[3],
-                                    phi=ellipsoid_coeff[5], z_h=0)
-    plt.plot(pixels_ellipse[:, 1],
-             pixels_ellipse[:, 0], color=color)
+    center = ell_data['center']
+    a, b, c = ell_data['abc']
+    ell_plot_patch = matplotlib.patches.Ellipse((center[1],
+                                                 center[0]),
+                                                2 * a * (1 - ell_cutoff ** 2), 2 * b * (1 - ell_cutoff ** 2),
+                                                angle=-ell_data['rot_angle'] * 180 / np.pi,
+                                                facecolor='None', edgecolor=edgecolor)
+    plt.scatter(center[1], center[0], color=edgecolor)
 
-    if double is True:
-        pixels_ellipse = ellipse_points(x0=ellipsoid_coeff[0], y0=ellipsoid_coeff[1],
-                                        a=ellipsoid_coeff[2], b=ellipsoid_coeff[3],
-                                        phi=ellipsoid_coeff[5], z_h=0.6)
-        plt.plot(pixels_ellipse[:, 1],
-                 pixels_ellipse[:, 0], color=color)
-
-    return
+    return ell_plot_patch
 
 
-def dna_height_plots(molecules):
-    """ Plot a few useful diagram to check the DNA height """
+def plot_text(key_list, mol, pos=3):
 
-    height_avg = [mol.results['height_avg'] for mol in molecules if mol.results['failed'] is False]
+    for key in key_list:
+        if key == 'failed_reason':
+            plt.text(2, pos, key + ': ' + mol.results[key], color='white', fontsize=8)
+        else:
+            plt.text(2, pos, key + ': ' + repr(np.round(mol.results[key], decimals=1)), color='white', fontsize=8)
+        pos += 3
 
     return
