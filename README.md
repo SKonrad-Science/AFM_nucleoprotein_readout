@@ -1,5 +1,8 @@
 # Automated readout of nucleoprotein complexes in AFM images
 
+Publications that partially utilized this code:
+[Test](https://doi.org/10.1039/D0NR08564B "Nanoscale, 2021")
+
 ## Contents
 
 - [Overview](#overview)
