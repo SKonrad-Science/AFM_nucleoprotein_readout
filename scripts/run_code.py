@@ -21,7 +21,7 @@ kwargs = {'analyze_bare_DNA': True,         # Analyze bare DNA - True or False
           'analyze_nucleosomes_eb': False}  # Analyze endbound nucleosomes - True or False
 deconvolve = {'decon': True,                # Applies a deconv. for tracing. Only works when bare DNA analysis is True
               'tip_shape': None}
-output_file = 'cenpa.xlsx'  # Name of the Excel Workbook to store the data in
+output_file = 'nucleosomes.xlsx'                  # Name of the Excel Workbook to store the data in
 
 # Data export decision making
 save_close_ups = True                       # Save close-up shots of each molecule in a png - True or False
